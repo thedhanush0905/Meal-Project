@@ -1,204 +1,152 @@
 package com.example.backend.service;
 
-import com.example.backend.dto.*;
-import com.example.backend.entity.*;
-import com.example.backend.repository.*;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
+import com.example.backend.dto.IngredientCalorie;
+import com.example.backend.dto.CalorieResponse;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
-@Slf4j
 public class MealService {
-
-    private final MealRepository mealRepository;
-    private final CategoryRepository categoryRepository;
-    private final AreaRepository areaRepository;
-    private final IngredientRepository ingredientRepository;
-    private final MealIngredientRepository mealIngredientRepository;
-
-    /**
-     * Get all meals for card view (id, name, thumbnail)
-     */
-    public List<MealCardDTO> getAllMealsForCards() {
-        return mealRepository.findAll().stream()
-                .map(meal -> new MealCardDTO(
-                        meal.getId(),
-                        meal.getName(),
-                        meal.getThumbnailUrl()
-                ))
-                .collect(Collectors.toList());
+    
+    private final WebClient webClient;
+    
+    @Value("${nutrition.api.url:https://api.api-ninjas.com/v1/nutrition}")
+    private String nutritionApiUrl;
+    
+    @Value("${nutrition.api.key:}")
+    private String nutritionApiKey;
+    
+    public MealService(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder.build();
     }
-
-    /**
-     * Get meal details by ID with full info and ingredients
-     */
-    public MealDetailDTO getMealDetails(Long id) {
-        Meal meal = mealRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Meal not found with id: " + id));
-
-        List<MealIngredientDTO> ingredients = mealIngredientRepository.findByMealId(id).stream()
-                .map(mi -> new MealIngredientDTO(
-                        mi.getIngredient().getId(),
-                        mi.getIngredient().getName(),
-                        mi.getMeasure()
-                ))
-                .collect(Collectors.toList());
-
-        return new MealDetailDTO(
-                meal.getId(),
-                meal.getExternalId(),
-                meal.getName(),
-                meal.getCategory() != null ? meal.getCategory().getName() : null,
-                meal.getArea() != null ? meal.getArea().getName() : null,
-                meal.getInstructions(),
-                meal.getThumbnailUrl(),
-                meal.getYoutubeUrl(),
-                meal.getTags(),
-                meal.getIsExternal(),
-                ingredients
-        );
-    }
-
-    /**
-     * Filter meals by category
-     */
-    public List<MealCardDTO> getMealsByCategory(String categoryName) {
-        Category category = categoryRepository.findByName(categoryName)
-                .orElseThrow(() -> new RuntimeException("Category not found: " + categoryName));
-
-        return mealRepository.findByCategoryId(category.getId()).stream()
-                .map(meal -> new MealCardDTO(
-                        meal.getId(),
-                        meal.getName(),
-                        meal.getThumbnailUrl()
-                ))
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Filter meals by ingredient using JPQL
-     */
-    public List<MealCardDTO> getMealsByIngredient(String ingredientName) {
-        Ingredient ingredient = ingredientRepository.findByName(ingredientName)
-                .orElseThrow(() -> new RuntimeException("Ingredient not found: " + ingredientName));
-
-        return mealIngredientRepository.findByIngredientId(ingredient.getId()).stream()
-                .map(mi -> new MealCardDTO(
-                        mi.getMeal().getId(),
-                        mi.getMeal().getName(),
-                        mi.getMeal().getThumbnailUrl()
-                ))
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Search meals by name (case-insensitive, partial match)
-     */
-    public List<MealCardDTO> searchMealsByName(String name) {
-        return mealRepository.findByNameContainingIgnoreCase(name).stream()
-                .map(meal -> new MealCardDTO(
-                        meal.getId(),
-                        meal.getName(),
-                        meal.getThumbnailUrl()
-                ))
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Create a new user meal
-     */
-    @Transactional
-    public MealDetailDTO createUserMeal(CreateMealRequest request) {
-        log.info("Creating user meal: {}", request.getName());
-
-        // Get or create category
-        Category category = null;
-        if (request.getCategoryName() != null && !request.getCategoryName().trim().isEmpty()) {
-            category = categoryRepository.findByName(request.getCategoryName())
-                    .orElseGet(() -> {
-                        Category newCategory = new Category();
-                        newCategory.setName(request.getCategoryName());
-                        return categoryRepository.save(newCategory);
-                    });
+    
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> searchMeals(String query) {
+        String url = "https://www.themealdb.com/api/json/v1/1/search.php?s=" + query;
+        
+        Map<String, Object> response = webClient.get()
+                .uri(url)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+        
+        if (response != null && response.containsKey("meals")) {
+            Object meals = response.get("meals");
+            if (meals instanceof List) {
+                return (List<Map<String, Object>>) meals;
+            }
         }
-
-        // Get or create area
-        Area area = null;
-        if (request.getAreaName() != null && !request.getAreaName().trim().isEmpty()) {
-            area = areaRepository.findByName(request.getAreaName())
-                    .orElseGet(() -> {
-                        Area newArea = new Area();
-                        newArea.setName(request.getAreaName());
-                        return areaRepository.save(newArea);
-                    });
+        return new ArrayList<>();
+    }
+    
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getMealById(String id) {
+        String url = "https://www.themealdb.com/api/json/v1/1/lookup.php?i=" + id;
+        
+        Map<String, Object> response = webClient.get()
+                .uri(url)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+        
+        if (response != null && response.containsKey("meals")) {
+            List<Map<String, Object>> meals = (List<Map<String, Object>>) response.get("meals");
+            if (meals != null && !meals.isEmpty()) {
+                return meals.get(0);
+            }
         }
-
-        // Create meal
-        Meal meal = new Meal();
-        meal.setName(request.getName());
-        meal.setCategory(category);
-        meal.setArea(area);
-        meal.setInstructions(request.getInstructions());
-        meal.setThumbnailUrl(request.getThumbnailUrl());
-        meal.setYoutubeUrl(request.getYoutubeUrl());
-        meal.setTags(request.getTags());
-        meal.setIsExternal(false); // User-created meal
-        meal.setExternalId(null);
-        meal.setCreatedBy(null); // TODO: Set this when user auth is implemented
-
-        meal = mealRepository.save(meal);
-        log.info("Saved meal with id: {}", meal.getId());
-
-        // Save ingredients
-        for (CreateMealRequest.IngredientRequest ingredientReq : request.getIngredients()) {
-            Ingredient ingredient = ingredientRepository.findByName(ingredientReq.getName())
-                    .orElseGet(() -> {
-                        Ingredient newIngredient = new Ingredient();
-                        newIngredient.setName(ingredientReq.getName());
-                        return ingredientRepository.save(newIngredient);
-                    });
-
-            MealIngredient mealIngredient = new MealIngredient();
-            mealIngredient.setMeal(meal);
-            mealIngredient.setIngredient(ingredient);
-            mealIngredient.setMeasure(ingredientReq.getMeasure());
-            mealIngredientRepository.save(mealIngredient);
+        return null;
+    }
+    
+    public CalorieResponse calculateCalories(String mealId) {
+        Map<String, Object> meal = getMealById(mealId);
+        
+        if (meal == null) {
+            throw new RuntimeException("Meal not found with id: " + mealId);
         }
-
-        // Return the created meal details
-        return getMealDetails(meal.getId());
+        
+        String mealName = (String) meal.get("strMeal");
+        List<IngredientCalorie> ingredients = new ArrayList<>();
+        double totalCalories = 0;
+        
+        // Extract ingredients and measures (TheMealDB has up to 20 ingredients)
+        for (int i = 1; i <= 20; i++) {
+            String ingredient = (String) meal.get("strIngredient" + i);
+            String measure = (String) meal.get("strMeasure" + i);
+            
+            if (ingredient != null && !ingredient.trim().isEmpty()) {
+                double calories = getCaloriesFromNutritionAPI(ingredient, measure);
+                ingredients.add(new IngredientCalorie(ingredient, measure != null ? measure : "", calories));
+                totalCalories += calories;
+            }
+        }
+        
+        return new CalorieResponse(mealId, mealName, ingredients, Math.round(totalCalories * 100.0) / 100.0);
     }
-
-    /**
-     * Get all categories
-     */
-    public List<String> getAllCategories() {
-        return categoryRepository.findAll().stream()
-                .map(Category::getName)
-                .collect(Collectors.toList());
+    
+    @SuppressWarnings("unchecked")
+    private double getCaloriesFromNutritionAPI(String ingredient, String measure) {
+        try {
+            String query = ingredient;
+            if (measure != null && !measure.trim().isEmpty()) {
+                query = measure + " " + ingredient;
+            }
+            
+            List<Map<String, Object>> nutritionData = webClient.get()
+                    .uri(nutritionApiUrl + "?query=" + query)
+                    .header("X-Api-Key", nutritionApiKey)
+                    .retrieve()
+                    .bodyToMono(List.class)
+                    .block();
+            
+            if (nutritionData != null && !nutritionData.isEmpty()) {
+                Object caloriesObj = nutritionData.get(0).get("calories");
+                if (caloriesObj instanceof Number) {
+                    return ((Number) caloriesObj).doubleValue();
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error fetching calories for " + ingredient + ": " + e.getMessage());
+        }
+        
+        // Return default if API fails
+        return 0.0;
     }
-
-    /**
-     * Get all areas
-     */
-    public List<String> getAllAreas() {
-        return areaRepository.findAll().stream()
-                .map(Area::getName)
-                .collect(Collectors.toList());
+    
+    public Map<String, Object> findLeastIngredientsMeal(String query) {
+        List<Map<String, Object>> meals = searchMeals(query);
+        
+        if (meals.isEmpty()) {
+            return null;
+        }
+        
+        Map<String, Object> leastIngredientMeal = meals.get(0);
+        int minIngredients = countIngredients(leastIngredientMeal);
+        
+        for (Map<String, Object> meal : meals) {
+            int count = countIngredients(meal);
+            if (count < minIngredients) {
+                minIngredients = count;
+                leastIngredientMeal = meal;
+            }
+        }
+        
+        return leastIngredientMeal;
     }
-
-    /**
-     * Get all ingredients
-     */
-    public List<String> getAllIngredients() {
-        return ingredientRepository.findAll().stream()
-                .map(Ingredient::getName)
-                .collect(Collectors.toList());
+    
+    private int countIngredients(Map<String, Object> meal) {
+        int count = 0;
+        for (int i = 1; i <= 20; i++) {
+            String ingredient = (String) meal.get("strIngredient" + i);
+            if (ingredient != null && !ingredient.trim().isEmpty()) {
+                count++;
+            }
+        }
+        return count;
     }
 }
